@@ -5,6 +5,14 @@ var Table = require('cli-table');
 var _ = require('lodash');
 var fs = Promise.promisifyAll(require('fs-extra'))
 var plex = require('./lib/plex')
+var Prompt = require('prompt-improved')
+var prompt = new Prompt({
+  prefixTheme: Prompt.chalk.green,
+  boolean: true,
+  default: 'N'
+})
+prompt.askAsync = Promise.promisify(prompt.ask)
+
 
 program
   .command('tv-ls')
@@ -66,25 +74,64 @@ program
   })
 
 
+var deleteShow = function(tvdbid) {
+
+  return Promise
+    .resolve(sickbeard.getShow(tvdbid))
+    .then(function(show) {
+      return Promise.all([
+        sickbeard.deleteShow(tvdbid),
+        fs.removeAsync(show.location)
+      ])
+    })
+    .then(function() {
+      return plex.refresh('show')
+    })
+
+}
+
 program
   .command('tv-rm <tvdbid>')
   .description('delete a show')
   .action(function(tvdbid) {
+    deleteShow(tvdbid).then(function() {
+      console.log("✔")
+    })
+  })
+
+program
+  .option('-y, --yes', 'say yes to everything')
+  .command('tv-cleanup')
+  .description('will delete tv shows that are canceled')
+  .action(function() {
     
     Promise
-      .resolve(sickbeard.getShow(tvdbid))
-      .then(function(show) {
-        return Promise.all([
-          sickbeard.deleteShow(tvdbid),
-          fs.removeAsync(show.location)
-        ])
+      .resolve(sickbeard.getShows())
+      .then(function(shows) {
+        return _.chain(shows)
+          .filter(function(show) {
+            return show.status == 'Ended'
+          })
+          .value()
       })
-      .then(function() {
-        return plex.refresh('show')
+      .each(function(show) {
+	
+	var q = Promise.resolve();
+	if (!program.yes) {
+          q = q.then(function() {
+            return prompt.askAsync('Delete "' + show.show_name + '"?')
+          })
+        }
+
+        q = q.then(function(res) {
+          if (res || program.yes) {
+            return deleteShow(show.tvdbid)
+          }
+        })
+
+	return q
       })
-      .then(function() {
-        console.log("✔")
-      })
+
   })
 
 program.parse(process.argv);
